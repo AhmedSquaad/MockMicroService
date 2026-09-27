@@ -1,0 +1,26 @@
+# Image "maison" contract-importer : embarque les contrats d'interface
+# (OpenAPI/AsyncAPI) au sein de l'image, pour ne plus dépendre d'un bind-mount
+# ./contracts au démarrage. Image autosuffisante (contrats + script inclus),
+# publiable telle quelle sur un registre Docker (ex. JFrog Artifactory).
+FROM curlimages/curl:8.10.1
+
+ARG IMAGE_VERSION=dev
+# URL par défaut du service Microcks ; surchargeable au run (-e MICROCKS_URL=...)
+# selon l'environnement cible (docker-compose, k8s, autre registre/instance).
+ENV MICROCKS_URL=http://microcks:8080
+
+LABEL org.opencontainers.image.title="contract-importer" \
+      org.opencontainers.image.description="Injecte automatiquement les contrats OpenAPI/AsyncAPI embarqués dans Microcks" \
+      org.opencontainers.image.version="${IMAGE_VERSION}" \
+      org.opencontainers.image.vendor="MockMicroService" \
+      org.opencontainers.image.source="https://github.com/your-org/MockMicroService"
+
+USER root
+COPY contracts/ /contracts/
+COPY scripts/upload-contracts.sh /usr/local/bin/upload-contracts.sh
+RUN chmod +x /usr/local/bin/upload-contracts.sh && \
+    chmod -R a+rX /contracts
+USER curl_user
+
+ENTRYPOINT ["/usr/local/bin/upload-contracts.sh"]
+

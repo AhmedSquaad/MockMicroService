@@ -1,0 +1,118 @@
+openapi: 3.0.3
+info:
+  title: Order Service API
+  description: Contrat d'interface REST du micro-service de gestion des commandes
+  version: 1.0.0
+servers:
+  - url: http://localhost:8585/rest/Order+Service+API/1.0.0
+paths:
+  /orders/{orderId}:
+    get:
+      operationId: getOrder
+      summary: Récupère une commande par son identifiant
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+          examples:
+            ORD-1001:
+              value: "ORD-1001"
+      responses:
+        '200':
+          description: Commande trouvée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+              examples:
+                ORD-1001:
+                  summary: Commande valide
+                  value:
+                    id: "ORD-1001"
+                    status: "CONFIRMED"
+                    amount: 129.90
+                    customerId: "CUST-42"
+        '404':
+          description: Commande introuvable
+          content:
+            application/json:
+              examples:
+                unknown:
+                  value:
+                    code: "NOT_FOUND"
+                    message: "Order not found"
+  /orders:
+    post:
+      operationId: createOrder
+      summary: Crée une nouvelle commande
+      x-microcks-operation:
+        dispatcher: JSON_BODY
+        dispatcherRules: |
+          {"exp": "/customerId", "operator": "presence", "cases": {"found": "default", "default": "invalid"}}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/OrderCreateRequest'
+            examples:
+              default:
+                summary: Requête de création valide
+                value:
+                  customerId: "CUST-42"
+                  amount: 129.90
+              invalid:
+                summary: Requête invalide (customerId manquant)
+                value:
+                  amount: "pas-un-nombre"
+      responses:
+        '201':
+          description: Commande créée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+              examples:
+                default:
+                  summary: Commande créée
+                  value:
+                    id: "ORD-1002"
+                    status: "PENDING"
+                    amount: 129.90
+                    customerId: "CUST-42"
+        '400':
+          description: Requête invalide (ne respecte pas le contrat)
+          content:
+            application/json:
+              examples:
+                invalid:
+                  value:
+                    code: "BAD_REQUEST"
+                    message: "Request does not match the API contract"
+components:
+  schemas:
+    Order:
+      type: object
+      required: [id, status, amount, customerId]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [PENDING, CONFIRMED, CANCELLED]
+        amount:
+          type: number
+          format: double
+        customerId:
+          type: string
+    OrderCreateRequest:
+      type: object
+      required: [customerId, amount]
+      properties:
+        customerId:
+          type: string
+        amount:
+          type: number
+          format: double

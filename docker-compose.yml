@@ -1,0 +1,42 @@
+# MockMicroService - Mock REST + WebSocket piloté par contrats (OpenAPI / AsyncAPI)
+# Aucune ligne de code : les mocks sont entièrement générés à partir des fichiers
+# placés dans ./contracts/openapi et ./contracts/asyncapi
+
+services:
+  microcks:
+    image: quay.io/microcks/microcks-uber:latest
+    container_name: microcks
+    restart: on-failure
+    ports:
+      - "8585:8080"
+    environment:
+      - ASYNC_MINION_URL=http://microcks-async-minion:8081
+
+  microcks-async-minion:
+    image: quay.io/microcks/microcks-uber-async-minion:latest
+    container_name: microcks-async-minion
+    depends_on:
+      - microcks
+    restart: on-failure
+    ports:
+      - "8586:8081"
+    environment:
+      - MICROCKS_HOST_PORT=microcks:8080
+
+  # Service "one-shot" qui injecte automatiquement les contrats au démarrage.
+  # Image "maison" (voir Dockerfile.contract-importer) qui embarque les contrats
+  # du dossier contracts/ au moment du build, plutôt qu'un bind-mount : l'image
+  # est autonome et peut être poussée sur un registre Docker.
+  # (microcks-cli >= 1.0 exige une session "login" ; on utilise directement
+  # l'API REST d'upload d'artifact, sans authentification, comme le script
+  # scripts/inject-contract.sh)
+  contract-importer:
+    build:
+      context: .
+      dockerfile: Dockerfile.contract-importer
+    image: mockmicroservice/contract-importer:latest
+    container_name: contract-importer
+    depends_on:
+      - microcks
+      - microcks-async-minion
+    restart: "no"
