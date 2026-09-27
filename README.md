@@ -45,7 +45,13 @@ flowchart LR
 ```
 
 - **microcks** : application principale, expose l'UI (port `8585`) et les mocks REST.
-- **microcks-async-minion** : moteur dédié qui expose les mocks WebSocket/AsyncAPI (port `8586`).
+  Un `healthcheck` Docker (`curl -f http://localhost:8080/api/services`) permet aux
+  autres services d'attendre qu'il soit réellement prêt (l'application Spring Boot
+  met quelques secondes à démarrer), et pas seulement que son conteneur ait démarré.
+- **microcks-async-minion** : moteur dédié qui expose les mocks WebSocket/AsyncAPI
+  (port `8586`). Dépend de `microcks: condition: service_healthy` dans
+  [docker-compose.yml](docker-compose.yml) : sans cette condition, il démarre trop
+  tôt, essuie un `Connection refused` vers Microcks et crashe/redémarre en boucle.
 - **contract-importer** : conteneur "one-shot" issu d'une image **"maison"** (voir
   [Dockerfile.contract-importer](Dockerfile.contract-importer)) qui embarque les
   contrats du dossier `contracts/` au moment du build, attend que Microcks soit
@@ -61,6 +67,7 @@ flowchart LR
 MockMicroService/
 ├── docker-compose.yml
 ├── Dockerfile.contract-importer       # image "maison" du contract-importer
+├── .gitlab-ci.yml                     # pipeline d'exemple : démarrage du mock + tests d'intégration
 ├── contracts/
 │   ├── openapi/
 │   │   └── order-service.yaml        # contrat REST d'exemple
@@ -68,7 +75,8 @@ MockMicroService/
 │       └── order-notifications.yaml  # contrat WebSocket d'exemple
 └── scripts/
     ├── inject-contract.sh            # injection manuelle a posteriori
-    └── upload-contracts.sh           # entrypoint embarqué dans l'image "maison"
+    ├── upload-contracts.sh           # entrypoint embarqué dans l'image "maison"
+    └── ws-test.js                    # client WebSocket non-interactif (tests CI)
 ```
 
 ## 4. Démarrage
@@ -287,6 +295,18 @@ Le mock pousse alors en boucle le même message défini dans l'exemple AsyncAPI 
 }
 ```
 
+> ⚠️ `wscat` se ferme immédiatement sans rien recevoir si son entrée standard
+> n'est pas un terminal interactif (systématiquement le cas dans un script ou
+> un job CI) : il fonctionne bien en usage manuel comme ci-dessus, mais pas dans
+> un pipeline automatisé. Pour un test scripté/non-interactif, utilisez plutôt
+> [scripts/ws-test.js](scripts/ws-test.js) (voir [section 10. Intégration continue (GitLab CI)](#10-int%C3%A9gration-continue-gitlab-ci)) :
+> ```bash
+> npm install -g ws
+> NODE_PATH="$(npm root -g)" node scripts/ws-test.js \
+>   ws://localhost:8586/api/ws/Order+Notifications+API/1.0.0/orders/notifications \
+>   10000 ORD-1001
+> ```
+
 > Le chemin exact de l'endpoint WebSocket (`/api/ws/...`) est indiqué dans l'UI
 > Microcks, onglet de l'API AsyncAPI importée, section "Mock URL". Le contrat
 > AsyncAPI doit déclarer explicitement un binding `ws` sur le channel (voir
@@ -305,7 +325,51 @@ Le mock pousse alors en boucle le même message défini dans l'exemple AsyncAPI 
    minimal sur le modèle de `contracts/asyncapi/order-notifications.yaml` (avec
    un binding `ws` explicite sur le channel) et injectez-le de la même façon.
 
-## 9. Aller plus loin
+## 9. Intégration continue (GitLab CI)
+
+[.gitlab-ci.yml](.gitlab-ci.yml) fournit un exemple de job d'intégration qui
+démarre le mock complet (build de l'image `contract-importer` + Microcks +
+async-minion), attend l'injection des contrats, exécute des tests contre les
+deux canaux (REST et WebSocket), puis arrête et nettoie la stack.
+
+### 9.1 Prérequis runner
+
+Le job utilise un service `docker:26.1-dind` (Docker-in-Docker) pour lancer
+`docker-compose` depuis le job : le runner GitLab doit utiliser l'executor
+`docker` en mode **privilégié** (`privileged = true` dans `config.toml`), sinon
+le service dind ne démarre pas. Voir les commentaires en tête du fichier pour
+le détail et l'alternative sans dind (montage du socket Docker de l'hôte).
+
+### 9.2 Points de synchronisation importants
+
+Deux races conditions ont été identifiées et corrigées lors de la mise au point
+de ce pipeline — à connaître si vous l'adaptez à un autre contexte :
+
+- **Attendre la fin de l'injection, pas seulement la dispo de Microcks** :
+  `curl http://microcks:8080/api/services` répond dès le démarrage de Microcks,
+  avant même que `contract-importer` ait fini d'injecter les contrats. Le job
+  utilise donc `docker wait contract-importer` (bloquant jusqu'à la fin du
+  conteneur one-shot) et vérifie son code de sortie, plutôt qu'un simple ping.
+- **`microcks-async-minion` démarre trop vite** : sans coordination, il tente de
+  joindre Microcks avant que ce dernier soit prêt (`Connection refused`), crashe
+  et redémarre. Le `healthcheck` de `microcks` et le `depends_on: condition:
+  service_healthy` dans [docker-compose.yml](docker-compose.yml) évitent ce
+  crash-boucle, mais l'async-minion peut malgré tout mettre quelques secondes
+  de plus à charger le contrat AsyncAPI après son propre démarrage. C'est pour
+  cela que [scripts/ws-test.js](scripts/ws-test.js) réessaie la connexion
+  WebSocket (backoff 1s) jusqu'à un délai total configurable, plutôt que
+  d'abandonner à la première erreur (`socket hang up`, `ECONNREFUSED`, etc.).
+
+### 9.3 Adapter le pipeline
+
+Ce fichier est un exemple à copier/adapter dans le pipeline du micro-service
+consommateur du mock (ex. pour valider un client REST/WebSocket contre les
+contrats avant de le déployer). Les assertions (`curl` + codes HTTP attendus,
+et `node scripts/ws-test.js` pour le WebSocket) peuvent être remplacées par vos
+propres tests d'intégration, tant que le mock est démarré/arrêté de la même
+façon.
+
+## 10. Aller plus loin
 
 - Documentation Microcks : https://microcks.io/documentation/
 - Format des exemples OpenAPI : https://microcks.io/documentation/references/artifacts/openapi-conventions/

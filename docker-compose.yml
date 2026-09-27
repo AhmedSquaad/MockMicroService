@@ -11,12 +11,23 @@ services:
       - "8585:8080"
     environment:
       - ASYNC_MINION_URL=http://microcks-async-minion:8081
+    # microcks-async-minion crashe s'il démarre avant que Microcks soit réellement
+    # prêt (l'appli Spring Boot met ~10s à démarrer) : ce healthcheck permet aux
+    # services dépendants d'attendre l'état "healthy" plutôt que le seul démarrage
+    # du conteneur.
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/services"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
 
   microcks-async-minion:
     image: quay.io/microcks/microcks-uber-async-minion:latest
     container_name: microcks-async-minion
     depends_on:
-      - microcks
+      microcks:
+        condition: service_healthy
     restart: on-failure
     ports:
       - "8586:8081"
@@ -37,6 +48,8 @@ services:
     image: mockmicroservice/contract-importer:latest
     container_name: contract-importer
     depends_on:
-      - microcks
-      - microcks-async-minion
+      microcks:
+        condition: service_healthy
+      microcks-async-minion:
+        condition: service_started
     restart: "no"
