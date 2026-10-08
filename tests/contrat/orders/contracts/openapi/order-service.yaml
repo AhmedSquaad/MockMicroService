@@ -6,46 +6,31 @@ info:
 servers:
   - url: http://localhost:8585/rest/Order+Service+API/1.0.0
 paths:
-  /orders/{orderId}:
+  /orders:
     get:
-      operationId: getOrder
-      summary: Récupère une commande par son identifiant
-      parameters:
-        - name: orderId
-          in: path
-          required: true
-          schema:
-            type: string
-          examples:
-            ORD-1001:
-              value: "ORD-1001"
+      operationId: listOrders
+      summary: Liste les commandes
       responses:
         '200':
-          description: Commande trouvée
+          description: Liste des commandes
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/Order'
+                type: array
+                items:
+                  $ref: '#/components/schemas/Order'
               examples:
-                ORD-1001:
-                  summary: Commande valide
+                all:
+                  summary: Deux commandes d'exemple
                   value:
-                    id: "ORD-1001"
-                    status: "CONFIRMED"
-                    amount: 129.90
-                    customerId: "CUST-42"
-        '404':
-          description: Commande introuvable
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/Error'
-              examples:
-                unknown:
-                  value:
-                    code: "NOT_FOUND"
-                    message: "Order not found"
-  /orders:
+                    - id: "ORD-1001"
+                      status: "CONFIRMED"
+                      amount: 129.90
+                      customerId: "CUST-42"
+                    - id: "ORD-1002"
+                      status: "PENDING"
+                      amount: 59.90
+                      customerId: "CUST-7"
     post:
       operationId: createOrder
       summary: Crée une nouvelle commande
@@ -95,6 +80,45 @@ paths:
                   value:
                     code: "BAD_REQUEST"
                     message: "Request does not match the API contract"
+  /orders/{orderId}:
+    get:
+      operationId: getOrder
+      summary: Récupère une commande par son identifiant
+      parameters:
+        - name: orderId
+          in: path
+          required: true
+          schema:
+            type: string
+          examples:
+            ORD-1001:
+              value: "ORD-1001"
+      responses:
+        '200':
+          description: Commande trouvée
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Order'
+              examples:
+                ORD-1001:
+                  summary: Commande valide
+                  value:
+                    id: "ORD-1001"
+                    status: "CONFIRMED"
+                    amount: 129.90
+                    customerId: "CUST-42"
+        '404':
+          description: Commande introuvable
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+              examples:
+                unknown:
+                  value:
+                    code: "NOT_FOUND"
+                    message: "Order not found"
 components:
   schemas:
     Error:

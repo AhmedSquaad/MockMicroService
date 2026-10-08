@@ -1,0 +1,38 @@
+# Mock Microcks pour les tests de contrat LOCAUX du module orders (REST).
+#
+# Usage (depuis ce dossier) :
+#   docker compose up -d
+#   MOCK_BASE_URL=http://localhost:8585/rest/Order+Service+API/1.0.0 \
+#     ctest --test-dir ../../../build -R orders_contract --output-on-failure
+#   docker compose down -v
+#
+# En CI, Microcks est lancé comme service GitLab (pas besoin de ce compose) :
+# voir .gitlab-ci.yml à la racine.
+
+services:
+  microcks:
+    image: quay.io/microcks/microcks-uber:latest
+    container_name: microcks
+    ports:
+      - "8585:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/api/services"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 10s
+
+  # Conteneur one-shot : injecte le contrat du module orders au démarrage.
+  contract-importer:
+    image: curlimages/curl:8.10.1
+    container_name: contract-importer
+    entrypoint: ["sh", "/scripts/upload-contracts.sh"]
+    volumes:
+      - ./contracts:/contracts:ro
+      - ./upload-contracts.sh:/scripts/upload-contracts.sh:ro
+    environment:
+      - MICROCKS_URL=http://microcks:8080
+    depends_on:
+      microcks:
+        condition: service_healthy
+    restart: "no"

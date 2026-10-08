@@ -1,0 +1,3 @@
+# Réglages communs partagés par les profils (inclus via `include(profiles/common)`).
+[conf]
+tools.cmake.cmaketoolchain:generator=Ninja

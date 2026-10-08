@@ -1,0 +1,22 @@
+# Build & dépendances
+/build/
+/.venv/
+
+# Conan (généré à la racine par CMakeDeps/presets)
+/CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+*.cmake.user
+
+# Logs de debug
+*.log
+
+# Artefacts de test
+report-*.xml
+
+# Divers OS / éditeurs
+.DS_Store
+*~
+.idea/
+.vscode/

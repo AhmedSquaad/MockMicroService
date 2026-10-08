@@ -1,0 +1,25 @@
+# Dépendances gérées par Conan 2.
+#
+# Installation (depuis la racine du dépôt) :
+#   conan install . -of build --build=missing \
+#     -pr:h conan/host.profile -pr:b conan/host.profile
+#   cmake --preset conan-release
+#   cmake --build build
+#
+# NB : construire Qt depuis les sources via Conan est long ; en pratique on
+# utilise un cache Conan partagé / des binaires pré-compilés (remote).
+
+[requires]
+qt/6.7.1
+gtest/1.14.0
+
+[generators]
+CMakeDeps
+CMakeToolchain
+
+[options]
+# Toutes les dépendances en dynamique (déployées ensuite dans build/lib).
+*:shared=True
+qt/*:qtdeclarative=True
+qt/*:qtshadertools=True
+gtest/*:build_gmock=True

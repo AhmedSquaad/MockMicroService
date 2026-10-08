@@ -1,101 +1,90 @@
-# Exemple de pipeline GitLab CI : démarre le mock Microcks (REST + WebSocket)
-# piloté par les contrats de contracts/, exécute des tests d'intégration contre
-# les deux canaux, puis arrête proprement le mock. À adapter/copier dans le
-# pipeline du micro-service consommateur du mock.
+# Pipeline CI de l'application C++/Qt6 (Conan + CMake + GTest).
 #
-# Prérequis côté GitLab Runner : ce job utilise le service `docker:26.1-dind`
-# (Docker-in-Docker) pour pouvoir lancer `docker-compose` à l'intérieur du job.
-# Cela nécessite un runner avec l'executor `docker` configuré en mode privilégié
-# dans /etc/gitlab-runner/config.toml :
-#   [[runners]]
-#     executor = "docker"
-#     [runners.docker]
-#       privileged = true
-#       # volumes = ["/certs/client", "/cache"]  # optionnel, cache TLS entre jobs
-# Sans `privileged = true`, le service dind ne peut pas démarrer et le job échoue
-# avec une erreur de type "Cannot connect to the Docker daemon".
+# 2 stages, 3 jobs :
+#   build          -> compile l'app + les tests DANS l'image builder (construite
+#                     au préalable en local depuis le Dockerfile : toolchain +
+#                     cache Conan DÉJÀ rempli). conan install retrouve tout dans
+#                     le cache embarqué, aucune compilation de dépendance, puis
+#                     publie build/ en artefact.
+#   test:unit      -> exécute les tests unitaires (hors-ligne, API mockée).
+#   test:contrat   -> exécute les tests de contrat contre un Microcks lancé en
+#                     SERVICE GitLab (pas de Docker-in-Docker, pas de privileged).
 #
-# Alternative sans dind (DooD) : si le runner autorise déjà le montage du socket
-# hôte (`/var/run/docker.sock:/var/run/docker.sock`), on peut supprimer le
-# service `docker:26.1-dind` et les variables DOCKER_HOST/TLS ci-dessous, et
-# utiliser directement "localhost" à la place de `${MICROCKS_HOST}`. Cette
-# approche partage le daemon Docker de l'hôte runner (moins isolé mais plus
-# rapide, pas de démarrage de dind à chaque job).
+# Les jobs de test réutilisent l'artefact build/ et lancent directement les
+# binaires : aucune librairie à installer (RPATH -> build/lib).
+#
+# Pré-requis : l'image builder doit exister dans le registry GitLab du projet.
+# Construisez-la et poussez-la (hors CI) avec :
+#   scripts/push-image.sh
 
 stages:
-  - integration-test
+  - build
+  - test
 
 variables:
-  # Docker-in-Docker : le service dind est joignable depuis le job via l'alias "docker"
-  # (et non "localhost", puisque les conteneurs docker-compose tournent dans le dind).
-  DOCKER_HOST: tcp://docker:2376
-  DOCKER_TLS_CERTDIR: "/certs"
-  DOCKER_TLS_VERIFY: 1
-  DOCKER_CERT_PATH: "/certs/client"
-  MICROCKS_HOST: docker
-  COMPOSE_VERSION: "2.29.2"
+  # Image builder construite depuis le Dockerfile et poussée dans le registry
+  # GitLab (cf. scripts/push-image.sh), hors CI.
+  BUILDER_IMAGE: "registry.gitlab.com/squaad.io/mockmicroservice"
 
-integration-test:mock:
-  stage: integration-test
-  image: docker:26.1
-  # Épingle le job à un runner partagé GitLab.com, qui supporte le mode privileged
-  # requis par le service docker:*-dind (un runner sans privileged, ex. VPS
-  # auto-hébergé, fait échouer le dind avec ".../ca.pem: no such file").
-  tags:
-    - saas-linux-small-amd64
-  services:
-    - docker:26.1-dind
-  before_script:
-    - apk add --no-cache curl bash
-    - curl -sSL "https://github.com/docker/compose/releases/download/v${COMPOSE_VERSION}/docker-compose-linux-x86_64" -o /usr/local/bin/docker-compose
-    - chmod +x /usr/local/bin/docker-compose
+build:
+  stage: build
+  # L'image embarque la toolchain ET le cache Conan : pas de before_script,
+  # pas d'install de dépendances, pas de compilation de Qt/GTest.
+  image: "${BUILDER_IMAGE}"
+  variables:
+    # Cache Conan embarqué dans l'image (cf. CONAN_HOME du Dockerfile).
+    CONAN_HOME: "/opt/conan2"
   script:
-    - echo "Démarrage du mock Microcks (REST + WebSocket, contrats montés en bind-mount)..."
-    - docker-compose up -d
+    # Dépendances dynamiques (dans build/conan) + libs runtime déployées dans build/lib.
+    # Tout est déjà dans le cache de l'image : --build=missing ne compile rien.
+    - conan install . --lockfile=conan.lock --output-folder=build/conan --build=missing -s build_type=Release
+        -o "*:shared=True" --deployer=runtime_deploy --deployer-folder=build/lib
+    # Les outils hôtes de Qt (qmlimportscanner, moc) ont besoin des libs déployées au build.
+    - export LD_LIBRARY_PATH="${CI_PROJECT_DIR}/build/lib:${LD_LIBRARY_PATH:-}"
+    - cmake -S . -B build/cmake -G Ninja -DCMAKE_BUILD_TYPE=Release
+        -DCMAKE_TOOLCHAIN_FILE="${CI_PROJECT_DIR}/build/conan/conan_toolchain.cmake"
+        -DCMAKE_RUNTIME_OUTPUT_DIRECTORY="${CI_PROJECT_DIR}/build"
+    - cmake --build build/cmake
+  artifacts:
+    paths:
+      - build/ecommerce
+      - build/orders_unit_tests
+      - build/orders_contract_tests
+      - build/lib/
+    expire_in: 1 day
 
-    - |
-      echo "Attente de la fin de l'injection des contrats par contract-importer..."
-      # /api/services répond dès le démarrage de Microcks, avant même que les
-      # contrats soient chargés : on attend donc la fin (succès ou échec) du
-      # conteneur one-shot contract-importer plutôt que la seule dispo de Microcks.
-      IMPORTER_EXIT_CODE=$(docker wait contract-importer)
-      docker-compose logs contract-importer
-      if [ "$IMPORTER_EXIT_CODE" != "0" ]; then
-        echo "contract-importer a échoué (exit code ${IMPORTER_EXIT_CODE})"
-        exit 1
-      fi
-
-    - echo "Test de contrat -- REST (contrat OpenAPI vs mock)"
-    - |
-      # testEndpoint est résolu par le conteneur microcks lui-même, pas par le job :
-      # il doit donc utiliser le nom de service et le port internes au réseau
-      # docker-compose (microcks:8080), pas l'alias/port exposés côté job (docker:8585).
-      MICROCKS_URL="http://${MICROCKS_HOST}:8585" ./scripts/contract-test.sh \
-        "Order Service API:1.0.0" "http://microcks:8080/rest/Order+Service+API/1.0.0" OPEN_API_SCHEMA 10000
-
-    - echo "Test de contrat -- WebSocket (contrat AsyncAPI vs mock)"
-    - |
-      # Le conteneur async-minion est "Started" bien avant que son appli Quarkus
-      # écoute réellement sur 8081 (~10s de boot) : lancer le test WS trop tôt
-      # provoque un "Connection refused" côté Microcks. On attend donc que le
-      # port publié (docker:8586) accepte une connexion avant de lancer le test.
-      echo "Attente que microcks-async-minion soit prêt à écouter (WebSocket)..."
-      for i in $(seq 1 30); do
-        if curl -s -o /dev/null "http://${MICROCKS_HOST}:8586/"; then
-          echo "async-minion prêt."
-          break
-        fi
-        echo "  ... pas encore prêt (${i}/30)"
-        sleep 2
-      done
-    - |
-      MICROCKS_URL="http://${MICROCKS_HOST}:8585" ./scripts/contract-test.sh \
-        "Order Notifications API:1.0.0" "ws://microcks-async-minion:8081/api/ws/Order+Notifications+API/1.0.0/orders/notifications" ASYNC_API_SCHEMA 10000
-  after_script:
-    - docker-compose logs --no-color > docker-compose.log 2>&1 || true
-    - docker-compose down -v || true
+test:unit:
+  stage: test
+  image: ubuntu:24.04
+  needs: ["build"]
+  script:
+    # Binaire auto-suffisant : aucune lib à installer (RPATH -> build/lib).
+    - ./build/orders_unit_tests --gtest_output=xml:report-unit.xml
   artifacts:
     when: always
-    paths:
-      - docker-compose.log
-    expire_in: 1 week
+    reports:
+      junit: report-unit.xml
+
+test:contrat:
+  stage: test
+  image: ubuntu:24.04
+  needs: ["build"]
+  services:
+    - name: quay.io/microcks/microcks-uber:latest
+      alias: microcks
+  variables:
+    # Les tests de contrat tapent le service Microcks via son alias (port 8080).
+    MOCK_BASE_URL: "http://microcks:8080/rest/Order+Service+API/1.0.0"
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends curl
+    - |
+      echo "Attente de Microcks..."
+      until curl -sf "http://microcks:8080/api/services" > /dev/null; do sleep 2; done
+      curl -sf -X POST "http://microcks:8080/api/artifact/upload?mainArtifact=true" \
+        -F "file=@tests/contrat/orders/contracts/openapi/order-service.yaml"
+  script:
+    - ./build/orders_contract_tests --gtest_output=xml:report-contract.xml
+  artifacts:
+    when: always
+    reports:
+      junit: report-contract.xml

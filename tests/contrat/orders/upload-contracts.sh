@@ -1,11 +1,12 @@
 #!/bin/sh
-# Injecte tous les contrats (OpenAPI/AsyncAPI) présents sous /contracts dans Microcks.
-# Utilisé comme entrypoint du service contract-importer (voir docker-compose.yml).
+# Injecte tous les contrats (OpenAPI) présents sous /contracts dans Microcks.
+# Entrypoint du conteneur contract-importer (voir docker-compose.yml).
 set -e
 
 MICROCKS_URL="${MICROCKS_URL:-http://microcks:8080}"
 
-until curl -sf "${MICROCKS_URL}/api/keycloak/config" > /dev/null 2>&1 || curl -sf "${MICROCKS_URL}/" > /dev/null 2>&1; do
+until curl -sf "${MICROCKS_URL}/api/keycloak/config" > /dev/null 2>&1 \
+  || curl -sf "${MICROCKS_URL}/" > /dev/null 2>&1; do
   echo "En attente de Microcks..."
   sleep 2
 done

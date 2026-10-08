@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/orders/qml">
+        <file>OrdersPanel.qml</file>
+    </qresource>
+</RCC>

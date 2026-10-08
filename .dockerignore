@@ -1,0 +1,10 @@
+# Contexte Docker minimal : on n'envoie au daemon que ce qui sert à peupler le
+# cache Conan (conanfile.txt). Tout le reste est inutile à la construction de
+# l'image builder.
+build/
+.venv/
+.git/
+*.log
+report-*.xml
+.vscode/
+.idea/
