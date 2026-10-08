@@ -38,6 +38,11 @@ variables:
 integration-test:mock:
   stage: integration-test
   image: docker:26.1
+  # Épingle le job à un runner partagé GitLab.com, qui supporte le mode privileged
+  # requis par le service docker:*-dind (un runner sans privileged, ex. VPS
+  # auto-hébergé, fait échouer le dind avec ".../ca.pem: no such file").
+  tags:
+    - saas-linux-small-amd64
   services:
     - docker:26.1-dind
   before_script:
