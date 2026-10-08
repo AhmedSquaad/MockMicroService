@@ -36,7 +36,7 @@ RESPONSE=$(curl -sf -X POST "${MICROCKS_URL}/api/tests" \
   -H "Content-Type: application/json" \
   -d "{\"serviceId\":\"${SERVICE_ID}\",\"testEndpoint\":\"${TEST_ENDPOINT}\",\"runnerType\":\"${RUNNER_TYPE}\",\"timeout\":${TIMEOUT_MS}}")
 
-TEST_ID=$(echo "${RESPONSE}" | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -1 | sed -E 's/.*"([^"]*)"$/\1/')
+TEST_ID=$(echo "${RESPONSE}" | grep -o '"id"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -n '1{s/.*"\([^"]*\)"$/\1/;p}')
 
 if [[ -z "${TEST_ID}" ]]; then
   echo "Echec du lancement du test, réponse Microcks inattendue:" >&2
@@ -50,7 +50,11 @@ DEADLINE=$(( $(date +%s) + (TIMEOUT_MS / 1000) + 15 ))
 RESULT=""
 while :; do
   RESULT=$(curl -sf "${MICROCKS_URL}/api/tests/${TEST_ID}")
-  IN_PROGRESS=$(echo "${RESULT}" | grep -o '"inProgress"[[:space:]]*:[[:space:]]*[a-z]*' | sed -E 's/.*:[[:space:]]*//')
+  # Le JSON tient sur une seule ligne : "grep -o | head -1" fermerait le pipe
+  # dès la 1re correspondance et tuerait grep par SIGPIPE (code 141, intermittent
+  # sous "set -o pipefail"). "sed -n '1{...;p}'" ne quitte jamais en avance (pas
+  # de q), donc grep se termine normalement : aucun risque de SIGPIPE.
+  IN_PROGRESS=$(echo "${RESULT}" | grep -o '"inProgress"[[:space:]]*:[[:space:]]*[a-z]*' | sed -n '1{s/.*:[[:space:]]*//;p}')
 
   if [[ "${IN_PROGRESS}" == "false" ]]; then
     break
@@ -62,7 +66,10 @@ while :; do
   sleep "${POLL_INTERVAL_S}"
 done
 
-SUCCESS=$(echo "${RESULT}" | grep -o '"success"[[:space:]]*:[[:space:]]*[a-z]*' | sed -E 's/.*:[[:space:]]*//')
+# le champ "success" racine apparaît avant testCaseResults : sed -n '1{...;p}'
+# ne garde que cette première occurrence, sans jamais fermer le pipe en avance
+# (donc sans risque de SIGPIPE, contrairement à "grep -o | head -1").
+SUCCESS=$(echo "${RESULT}" | grep -o '"success"[[:space:]]*:[[:space:]]*[a-z]*' | sed -n '1{s/.*:[[:space:]]*//;p}')
 
 echo "Résultat détaillé: ${MICROCKS_URL}/#/tests/${TEST_ID}"
 

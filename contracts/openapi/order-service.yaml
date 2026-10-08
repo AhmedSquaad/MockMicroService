@@ -38,6 +38,8 @@ paths:
           description: Commande introuvable
           content:
             application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
               examples:
                 unknown:
                   value:
@@ -86,6 +88,8 @@ paths:
           description: Requête invalide (ne respecte pas le contrat)
           content:
             application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
               examples:
                 invalid:
                   value:
@@ -93,6 +97,14 @@ paths:
                     message: "Request does not match the API contract"
 components:
   schemas:
+    Error:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+        message:
+          type: string
     Order:
       type: object
       required: [id, status, amount, customerId]
