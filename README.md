@@ -52,11 +52,13 @@ flowchart LR
   (port `8586`). Dépend de `microcks: condition: service_healthy` dans
   [docker-compose.yml](docker-compose.yml) : sans cette condition, il démarre trop
   tôt, essuie un `Connection refused` vers Microcks et crashe/redémarre en boucle.
-- **contract-importer** : conteneur "one-shot" issu d'une image **"maison"** (voir
-  [Dockerfile.contract-importer](Dockerfile.contract-importer)) qui embarque les
-  contrats du dossier `contracts/` au moment du build, attend que Microcks soit
-  prêt puis les injecte via l'API REST d'upload d'artifact
-  (`POST /api/artifact/upload`), sans action manuelle ni bind-mount.
+- **contract-importer** : conteneur "one-shot" (image officielle `curlimages/curl`)
+  qui monte le dossier `contracts/` en **bind-mount** (lecture seule), attend que
+  Microcks soit prêt puis injecte tous les contrats trouvés via l'API REST d'upload
+  d'artifact (`POST /api/artifact/upload`). Comme les contrats ne sont pas embarqués
+  dans une image, mocker un µService supplémentaire (ou modifier le contrat d'un
+  µService existant) ne demande ni build ni modification de code : voir
+  [section 6bis. Mocker plusieurs µServices](#6bis-mocker-plusieurs-%C2%B5services).
   > Le CLI officiel `microcks-cli` (≥ 1.0) exige désormais une session `login`
   > (plus de mode anonyme `--microcksURL` + `--insecure`) : on utilise donc directement
   > l'API REST, plus simple pour un import anonyme au démarrage.
@@ -66,7 +68,6 @@ flowchart LR
 ```
 MockMicroService/
 ├── docker-compose.yml
-├── Dockerfile.contract-importer       # image "maison" du contract-importer
 ├── .gitlab-ci.yml                     # pipeline d'exemple : démarrage du mock + tests d'intégration
 ├── contracts/
 │   ├── openapi/
@@ -75,8 +76,8 @@ MockMicroService/
 │       └── order-notifications.yaml  # contrat WebSocket d'exemple
 └── scripts/
     ├── inject-contract.sh            # injection manuelle a posteriori
-    ├── upload-contracts.sh           # entrypoint embarqué dans l'image "maison"
-    └── ws-test.js                    # client WebSocket non-interactif (tests CI)
+    ├── contract-test.sh              # test de contrat Microcks, utilisé en CI
+    └── upload-contracts.sh           # entrypoint du conteneur contract-importer
 ```
 
 ## 4. Démarrage
@@ -87,9 +88,10 @@ docker compose up -d
 ```
 
 Au démarrage, le service `contract-importer` attend que Microcks soit prêt puis
-injecte automatiquement les deux contrats fournis dans `contracts/`. L'UI Microcks
-est disponible sur `http://localhost:8585`, où vous pouvez visualiser les APIs
-importées, leurs exemples et l'URL des mocks générés (menu **API & Services**).
+injecte automatiquement tous les contrats trouvés sous `contracts/` (deux fournis
+en exemple, mais rien n'empêche d'en ajouter d'autres pour d'autres µServices).
+L'UI Microcks est disponible sur `http://localhost:8585`, où vous pouvez visualiser
+les APIs importées, leurs exemples et l'URL des mocks générés (menu **API & Services**).
 
 Voir la section [5. Lancer et arrêter le mock](#5-lancer-et-arrêter-le-mock) pour
 le détail des commandes de démarrage, d'arrêt et de vérification.
@@ -102,11 +104,8 @@ le détail des commandes de démarrage, d'arrêt et de vérification.
 docker compose up -d
 ```
 Démarre (ou recrée) les 3 conteneurs (`microcks`, `microcks-async-minion`,
-`contract-importer`) en arrière-plan. La première fois (ou après une modification
-de `contracts/`), l'image "maison" `contract-importer` est (re)construite
-automatiquement à partir de [Dockerfile.contract-importer](Dockerfile.contract-importer).
-`contract-importer` se termine de lui-même une fois les contrats injectés
-(c'est normal, c'est un conteneur "one-shot").
+`contract-importer`) en arrière-plan. `contract-importer` se termine de lui-même
+une fois les contrats injectés (c'est normal, c'est un conteneur "one-shot").
 
 ### 5.2 Vérifier l'état des conteneurs
 
@@ -124,10 +123,10 @@ docker compose logs -f microcks-async-minion
 
 ### 5.4 Réinjecter les contrats sans tout redémarrer
 
-Après avoir modifié un fichier sous `contracts/`, l'image doit être reconstruite
-(les contrats sont copiés dans l'image au build, pas montés en volume) :
+Les contrats sont montés en bind-mount (pas copiés dans l'image) : après avoir
+ajouté/modifié un fichier sous `contracts/`, il suffit de relancer le conteneur
+`contract-importer`, sans rebuild :
 ```bash
-docker compose build contract-importer
 docker compose up -d --force-recreate contract-importer
 ```
 
@@ -149,24 +148,23 @@ docker compose down -v
 
 ## 6. Étapes d'injection d'un contrat d'interface
 
-### 6.1 Automatique (recommandé) — image "maison" du contract-importer
+### 6.1 Automatique (recommandé) — bind-mount, sans build
 
-Les contrats sont embarqués **au moment du build** de l'image `contract-importer`
-(voir [Dockerfile.contract-importer](Dockerfile.contract-importer)), ce qui la
-rend autonome (déployable sans bind-mount, versionnable, poussable sur un registre).
+Les contrats sont montés en lecture seule depuis `contracts/` dans le conteneur
+`contract-importer` (voir [docker-compose.yml](docker-compose.yml)) : aucune image
+à reconstruire, aucun code à modifier.
 
-1. Déposez votre fichier Swagger/OpenAPI dans `contracts/openapi/`.
+1. Déposez votre fichier Swagger/OpenAPI dans `contracts/openapi/` (ou un sous-dossier dédié, ex. `contracts/openapi/<mon-service>/`).
 2. Déposez votre fichier AsyncAPI dans `contracts/asyncapi/` (si vous avez un canal temps réel).
    `scripts/upload-contracts.sh` parcourt automatiquement tous les fichiers
-   `*.yaml`/`*.yml` sous `/contracts` : aucune modification du Dockerfile n'est nécessaire.
-3. Reconstruisez l'image et relancez l'injection :
+   `*.yaml`/`*.yml` sous `/contracts`, quelle que soit leur arborescence.
+3. Relancez l'injection :
    ```bash
-   docker compose build contract-importer
    docker compose up -d --force-recreate contract-importer
    ```
 
-Pour distribuer cette image "maison" sur un registre Docker : voir
-[section 6.3 Publier l'image sur JFrog Artifactory](#63-publier-limage-sur-jfrog-artifactory).
+Pour mocker plusieurs µServices en une fois (plusieurs contrats indépendants),
+voir [section 6bis. Mocker plusieurs µServices](#6bis-mocker-plusieurs-%C2%B5services).
 
 ### 6.2 Manuelle — sur une instance déjà démarrée (sans redémarrage)
 
@@ -183,54 +181,17 @@ curl -X POST "http://localhost:8585/api/artifact/upload?mainArtifact=true" \
 
 Ou via l'UI Microcks : **Importers → Upload artifact** puis sélectionner le fichier.
 
-### 6.3 Publier l'image sur JFrog Artifactory
+### 6.3 Pourquoi pas d'image à construire/publier
 
-L'image `contract-importer` est **autosuffisante** : elle embarque les contrats et
-le script d'injection, et n'a besoin que d'un accès réseau vers Microcks au
-démarrage. Elle peut donc être construite une fois en CI/CD, poussée sur un
-registre Docker JFrog Artifactory, puis réutilisée telle quelle (sans code source
-ni bind-mount) dans n'importe quel environnement.
-
-1. Authentifiez-vous auprès de votre registre Docker Artifactory (identifiants/
-   jeton d'accès générés dans Artifactory, menu **Edit Profile → Generate an
-   Identity Token**) :
-   ```bash
-   docker login mon-instance.jfrog.io
-   ```
-2. Construisez l'image en la taguant avec le chemin complet du repository Docker
-   Artifactory (`<registre>/<repo-docker>/<image>:<tag>`) :
-   ```bash
-   docker build -f Dockerfile.contract-importer \
-     --build-arg IMAGE_VERSION=1.0.0 \
-     -t mon-instance.jfrog.io/mon-repo-docker/contract-importer:1.0.0 \
-     -t mon-instance.jfrog.io/mon-repo-docker/contract-importer:latest \
-     .
-   ```
-3. Poussez l'image :
-   ```bash
-   docker push mon-instance.jfrog.io/mon-repo-docker/contract-importer:1.0.0
-   docker push mon-instance.jfrog.io/mon-repo-docker/contract-importer:latest
-   ```
-4. Pour la réutiliser ailleurs (autre machine, CI, cluster), il suffit de la
-   référencer directement dans `docker-compose.yml` (plus besoin de `build:`) :
-   ```yaml
-   contract-importer:
-     image: mon-instance.jfrog.io/mon-repo-docker/contract-importer:1.0.0
-     environment:
-       - MICROCKS_URL=http://microcks:8080   # adapter selon l'environnement cible
-     depends_on:
-       - microcks
-       - microcks-async-minion
-     restart: "no"
-   ```
-   ```bash
-   docker pull mon-instance.jfrog.io/mon-repo-docker/contract-importer:1.0.0
-   docker compose up -d
-   ```
-
-> `MICROCKS_URL` est défini avec une valeur par défaut (`http://microcks:8080`)
-> dans l'image, mais reste surchargeable au `docker run`/`docker compose` via une
-> variable d'environnement, sans avoir à reconstruire l'image.
+Aucune image `contract-importer` dédiée n'est construite, ni localement ni en
+CI/CD : le conteneur utilise l'image officielle `curlimages/curl` telle quelle,
+montée avec `contracts/` et `scripts/upload-contracts.sh` en bind-mount (section
+[2. Architecture](#2-architecture)). Avantages recherchés : pas d'étape de build
+dans le pipeline, pas de registre à gérer pour cette image, et un contrat ajouté/
+modifié est pris en compte au prochain `docker compose up`, sans publication
+intermédiaire. Si un déploiement sans accès au dépôt source est nécessaire (cas
+où le bind-mount n'est pas possible), il faudra alors reconstruire une image
+autonome packageant `contracts/` et le script — non couvert par ce dépôt.
 
 ### 6.4 Vérifier que le mock est bien exposé
 
@@ -239,6 +200,47 @@ l'URL du mock REST, par exemple :
 ```
 http://localhost:8585/rest/Order+Service+API/1.0.0/orders/ORD-1001
 ```
+
+## 6bis. Mocker plusieurs µServices
+
+Le bind-mount de `contracts/` (section 6.1) accepte un nombre quelconque de
+contrats, organisés librement (un sous-dossier par µService, par exemple) :
+```
+contracts/
+├── openapi/
+│   ├── order-service.yaml
+│   └── payment-service.yaml
+└── asyncapi/
+    ├── order-notifications.yaml
+    └── payment-notifications.yaml
+```
+Pour ajouter/mettre à jour le mock d'un µService : déposez/éditez son fichier de
+contrat, puis `docker compose up -d --force-recreate contract-importer`. Aucun
+autre µService n'est impacté, et le contrat original de chaque µService n'a pas
+besoin d'être modifié pour être mocké.
+
+### 6bis.1 Automatiser les tests de contrat en CLI
+
+Au-delà du mock, Microcks sait aussi **rejouer un contrat contre l'implémentation
+réelle d'un µService** pour vérifier sa conformité ("contract testing"), via son
+API `/api/tests`. Le script [scripts/contract-test.sh](scripts/contract-test.sh)
+automatise cet appel (lancement du test + attente + code de sortie exploitable
+en CI), pour n'importe quel µService déjà importé dans Microcks :
+
+```bash
+./scripts/contract-test.sh "Order Service API:1.0.0" http://order-service:8080 OPEN_API_SCHEMA 10000
+./scripts/contract-test.sh "Order Notifications API:1.0.0" ws://order-service:9000/ws ASYNC_API_SCHEMA 10000
+```
+
+- `<serviceId:version>` : nom et version du service tel qu'importés dans Microcks
+  (visibles dans l'UI ou dans le contrat, champs `info.title`/`info.version`).
+- `<testEndpoint>` : URL réelle du µService à valider (et non celle du mock).
+- `runnerType` : type de vérification (`OPEN_API_SCHEMA`, `ASYNC_API_SCHEMA`,
+  `POSTMAN`, `HTTP`, `SOAP_HTTP`, `GRPC_PROTOBUF`, `GRAPHQL_SCHEMA`...).
+- Le script sort en code `1` si le test échoue ou time out, ce qui permet de le
+  brancher directement dans un pipeline CI (voir [section 9](#9-int%C3%A9gration-continue-gitlab-ci))
+  pour valider automatiquement, à chaque déploiement, que chaque µService
+  respecte toujours son contrat — sans jamais avoir à modifier ce contrat.
 
 ## 7. Exemples d'utilisation
 
@@ -299,13 +301,7 @@ Le mock pousse alors en boucle le même message défini dans l'exemple AsyncAPI 
 > n'est pas un terminal interactif (systématiquement le cas dans un script ou
 > un job CI) : il fonctionne bien en usage manuel comme ci-dessus, mais pas dans
 > un pipeline automatisé. Pour un test scripté/non-interactif, utilisez plutôt
-> [scripts/ws-test.js](scripts/ws-test.js) (voir [section 10. Intégration continue (GitLab CI)](#10-int%C3%A9gration-continue-gitlab-ci)) :
-> ```bash
-> npm install -g ws
-> NODE_PATH="$(npm root -g)" node scripts/ws-test.js \
->   ws://localhost:8586/api/ws/Order+Notifications+API/1.0.0/orders/notifications \
->   10000 ORD-1001
-> ```
+> [scripts/contract-test.sh](scripts/contract-test.sh) (voir [section 9. Intégration continue (GitLab CI)](#9-int%C3%A9gration-continue-gitlab-ci)).
 
 > Le chemin exact de l'endpoint WebSocket (`/api/ws/...`) est indiqué dans l'UI
 > Microcks, onglet de l'API AsyncAPI importée, section "Mock URL". Le contrat
@@ -328,9 +324,10 @@ Le mock pousse alors en boucle le même message défini dans l'exemple AsyncAPI 
 ## 9. Intégration continue (GitLab CI)
 
 [.gitlab-ci.yml](.gitlab-ci.yml) fournit un exemple de job d'intégration qui
-démarre le mock complet (build de l'image `contract-importer` + Microcks +
-async-minion), attend l'injection des contrats, exécute des tests contre les
-deux canaux (REST et WebSocket), puis arrête et nettoie la stack.
+démarre le mock complet (Microcks + async-minion + contract-importer, sans
+aucun build d'image), attend l'injection des contrats, lance un test de contrat
+Microcks (via [scripts/contract-test.sh](scripts/contract-test.sh)) sur chacun
+des deux canaux (REST et WebSocket), puis arrête et nettoie la stack.
 
 ### 9.1 Prérequis runner
 
@@ -354,20 +351,16 @@ de ce pipeline — à connaître si vous l'adaptez à un autre contexte :
   joindre Microcks avant que ce dernier soit prêt (`Connection refused`), crashe
   et redémarre. Le `healthcheck` de `microcks` et le `depends_on: condition:
   service_healthy` dans [docker-compose.yml](docker-compose.yml) évitent ce
-  crash-boucle, mais l'async-minion peut malgré tout mettre quelques secondes
-  de plus à charger le contrat AsyncAPI après son propre démarrage. C'est pour
-  cela que [scripts/ws-test.js](scripts/ws-test.js) réessaie la connexion
-  WebSocket (backoff 1s) jusqu'à un délai total configurable, plutôt que
-  d'abandonner à la première erreur (`socket hang up`, `ECONNREFUSED`, etc.).
+  crash-boucle.
 
 ### 9.3 Adapter le pipeline
 
 Ce fichier est un exemple à copier/adapter dans le pipeline du micro-service
 consommateur du mock (ex. pour valider un client REST/WebSocket contre les
-contrats avant de le déployer). Les assertions (`curl` + codes HTTP attendus,
-et `node scripts/ws-test.js` pour le WebSocket) peuvent être remplacées par vos
-propres tests d'intégration, tant que le mock est démarré/arrêté de la même
-façon.
+contrats avant de le déployer). Les appels à `scripts/contract-test.sh` peuvent
+être dupliqués/paramétrés pour couvrir d'autres services/contrats (voir
+[section 6bis. Mocker plusieurs µServices](#6bis-mocker-plusieurs-%C2%B5services)),
+tant que le mock est démarré/arrêté de la même façon.
 
 ## 10. Aller plus loin
 

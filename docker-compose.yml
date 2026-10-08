@@ -35,18 +35,22 @@ services:
       - MICROCKS_HOST_PORT=microcks:8080
 
   # Service "one-shot" qui injecte automatiquement les contrats au démarrage.
-  # Image "maison" (voir Dockerfile.contract-importer) qui embarque les contrats
-  # du dossier contracts/ au moment du build, plutôt qu'un bind-mount : l'image
-  # est autonome et peut être poussée sur un registre Docker.
+  # Contrats et script montés en bind-mount (pas une image "maison" reconstruite
+  # à chaque contrat) : pour mocker un µService supplémentaire ou faire évoluer
+  # son contrat, il suffit de déposer/éditer un fichier sous contracts/ et de
+  # relancer ce conteneur — aucun build, aucune modification de code requise.
   # (microcks-cli >= 1.0 exige une session "login" ; on utilise directement
   # l'API REST d'upload d'artifact, sans authentification, comme le script
   # scripts/inject-contract.sh)
   contract-importer:
-    build:
-      context: .
-      dockerfile: Dockerfile.contract-importer
-    image: mockmicroservice/contract-importer:latest
+    image: curlimages/curl:8.10.1
     container_name: contract-importer
+    entrypoint: ["sh", "/scripts/upload-contracts.sh"]
+    volumes:
+      - ./contracts:/contracts:ro
+      - ./scripts/upload-contracts.sh:/scripts/upload-contracts.sh:ro
+    environment:
+      - MICROCKS_URL=http://microcks:8080
     depends_on:
       microcks:
         condition: service_healthy

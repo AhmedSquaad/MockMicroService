@@ -1,6 +1,6 @@
 #!/bin/sh
 # Injecte tous les contrats (OpenAPI/AsyncAPI) présents sous /contracts dans Microcks.
-# Utilisé comme entrypoint de l'image "maison" contract-importer (voir Dockerfile.contract-importer).
+# Utilisé comme entrypoint du service contract-importer (voir docker-compose.yml).
 set -e
 
 MICROCKS_URL="${MICROCKS_URL:-http://microcks:8080}"
