@@ -62,13 +62,16 @@ integration-test:mock:
 
     - echo "Test de contrat -- REST (contrat OpenAPI vs mock)"
     - |
+      # testEndpoint est résolu par le conteneur microcks lui-même, pas par le job :
+      # il doit donc utiliser le nom de service et le port internes au réseau
+      # docker-compose (microcks:8080), pas l'alias/port exposés côté job (docker:8585).
       MICROCKS_URL="http://${MICROCKS_HOST}:8585" ./scripts/contract-test.sh \
-        "Order Service API:1.0.0" "http://${MICROCKS_HOST}:8585/rest/Order+Service+API/1.0.0" OPEN_API_SCHEMA 10000
+        "Order Service API:1.0.0" "http://microcks:8080/rest/Order+Service+API/1.0.0" OPEN_API_SCHEMA 10000
 
     - echo "Test de contrat -- WebSocket (contrat AsyncAPI vs mock)"
     - |
       MICROCKS_URL="http://${MICROCKS_HOST}:8585" ./scripts/contract-test.sh \
-        "Order Notifications API:1.0.0" "ws://${MICROCKS_HOST}:8586/api/ws/Order+Notifications+API/1.0.0/orders/notifications" ASYNC_API_SCHEMA 10000
+        "Order Notifications API:1.0.0" "ws://microcks-async-minion:8081/api/ws/Order+Notifications+API/1.0.0/orders/notifications" ASYNC_API_SCHEMA 10000
   after_script:
     - docker-compose logs --no-color > docker-compose.log 2>&1 || true
     - docker-compose down -v || true
