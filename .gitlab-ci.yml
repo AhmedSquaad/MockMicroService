@@ -75,6 +75,20 @@ integration-test:mock:
 
     - echo "Test de contrat -- WebSocket (contrat AsyncAPI vs mock)"
     - |
+      # Le conteneur async-minion est "Started" bien avant que son appli Quarkus
+      # écoute réellement sur 8081 (~10s de boot) : lancer le test WS trop tôt
+      # provoque un "Connection refused" côté Microcks. On attend donc que le
+      # port publié (docker:8586) accepte une connexion avant de lancer le test.
+      echo "Attente que microcks-async-minion soit prêt à écouter (WebSocket)..."
+      for i in $(seq 1 30); do
+        if curl -s -o /dev/null "http://${MICROCKS_HOST}:8586/"; then
+          echo "async-minion prêt."
+          break
+        fi
+        echo "  ... pas encore prêt (${i}/30)"
+        sleep 2
+      done
+    - |
       MICROCKS_URL="http://${MICROCKS_HOST}:8585" ./scripts/contract-test.sh \
         "Order Notifications API:1.0.0" "ws://microcks-async-minion:8081/api/ws/Order+Notifications+API/1.0.0/orders/notifications" ASYNC_API_SCHEMA 10000
   after_script:
