@@ -1,14 +1,19 @@
 # Pipeline CI de l'application C++/Qt6 (Conan + CMake + GTest).
 #
-# 2 stages, 3 jobs :
-#   build          -> compile l'app + les tests DANS l'image builder (construite
-#                     au préalable en local depuis le Dockerfile : toolchain +
-#                     cache Conan DÉJÀ rempli). conan install retrouve tout dans
-#                     le cache embarqué, aucune compilation de dépendance, puis
-#                     publie build/ en artefact.
-#   test:unit      -> exécute les tests unitaires (hors-ligne, API mockée).
-#   test:contrat   -> exécute les tests de contrat contre un Microcks lancé en
-#                     SERVICE GitLab (pas de Docker-in-Docker, pas de privileged).
+# 2 stages, 4 jobs :
+#   build                   -> compile l'app + les tests DANS l'image builder
+#                               (construite au préalable en local depuis le
+#                               Dockerfile : toolchain + cache Conan DÉJÀ
+#                               rempli). conan install retrouve tout dans le
+#                               cache embarqué, aucune compilation de
+#                               dépendance, puis publie build/ en artefact.
+#   test:unit               -> exécute les tests unitaires (hors-ligne, API mockée).
+#   test:contrat            -> exécute les tests de contrat contre un Microcks
+#                               lancé en SERVICE GitLab (pas de
+#                               Docker-in-Docker, pas de privileged).
+#   test:e2e:accessibility  -> lance le binaire sous Xvfb/AT-SPI et vérifie que
+#                               ses contrôles QML sont exposés aux lecteurs
+#                               d'écran (voir tests/e2e/README.md).
 #
 # Les jobs de test réutilisent l'artefact build/ et lancent directement les
 # binaires : aucune librairie à installer (RPATH -> build/lib).
@@ -86,5 +91,30 @@ test:contrat:
     - ./build/orders_contract_tests --gtest_output=xml:report-contract.xml
   artifacts:
     when: always
+    reports:
+      junit: report-contract.xml
+
+test:e2e:accessibility:
+  stage: test
+  image: ubuntu:24.04
+  needs: ["build"]
+  # Dépend d'un vrai display (Xvfb) + bus AT-SPI : plus fragile en environnement
+  # CI que les autres jobs, on ne bloque donc pas le pipeline sur son échec.
+  allow_failure: true
+  variables:
+    E2E_APP_BINARY: "${CI_PROJECT_DIR}/build/ecommerce"
+    E2E_LD_LIBRARY_PATH: "${CI_PROJECT_DIR}/build/lib"
+    E2E_APP_NAME: "ecommerce"
+    E2E_EXPECTED_ACCESSIBLE_NAMES: "Commandes,Liste des commandes,Rafraîchir"
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends
+        python3 python3-pip python3-pyatspi at-spi2-core xvfb dbus-x11
+    - pip3 install --break-system-packages --no-cache-dir pytest
+  script:
+    - xvfb-run -a dbus-run-session -- pytest tests/e2e/test_accessibility.py -v --junitxml=report-e2e.xml
+  artifacts:
+    when: always
+    reports:
+      junit: report-e2e.xml
     reports:
       junit: report-contract.xml

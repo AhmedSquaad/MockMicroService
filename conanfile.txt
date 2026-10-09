@@ -22,4 +22,8 @@ CMakeToolchain
 *:shared=True
 qt/*:qtdeclarative=True
 qt/*:qtshadertools=True
+# Bridge AT-SPI (Linux) requis pour exposer l'UI aux lecteurs d'écran / tests
+# d'accessibilité (voir tests/e2e/test_accessibility.py).
+qt/*:with_dbus=True
+qt/*:with_atspi=True
 gtest/*:build_gmock=True
