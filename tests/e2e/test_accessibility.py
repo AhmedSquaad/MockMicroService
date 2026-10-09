@@ -52,15 +52,18 @@ def _collect_names(accessible, names):
 
 
 def _find_app(process, app_name, timeout):
+    print(f"[DEBUG] _find_app: waiting up to {timeout}s for app_name={app_name!r} pid={process.pid}")
     deadline = time.monotonic() + timeout
     target_pid = process.pid
 
     while time.monotonic() < deadline:
         returncode = process.poll()
         if returncode is not None:
+            print(f"[DEBUG] _find_app: process exited with returncode={returncode}")
             pytest.fail(f"Application exited during startup: {returncode}")
 
         desktop_count = pyatspi.Registry.getDesktopCount()
+        print(f"[DEBUG] _find_app: desktop_count={desktop_count}")
         for di in range(desktop_count):
             desktop = pyatspi.Registry.getDesktop(di)
             if desktop is None:
@@ -78,11 +81,15 @@ def _find_app(process, app_name, timeout):
                 except Exception:
                     pass
 
+                print(f"[DEBUG] _find_app: seen app name={name!r} pid={pid}")
+
                 if pid == target_pid:
+                    print(f"[DEBUG] _find_app: matched by pid={pid}")
                     return app
 
                 if app_name and app_name.lower() in name.lower():
                     logger.info("Found app %r on the AT-SPI bus", app.name)
+                    print(f"[DEBUG] _find_app: matched by name={name!r}")
                     return app
 
         time.sleep(0.5)
@@ -90,6 +97,7 @@ def _find_app(process, app_name, timeout):
     logger.warning(
         "Timed out after %.1fs waiting for %r on the AT-SPI bus", timeout, app_name
     )
+    print(f"[DEBUG] _find_app: timed out after {timeout}s, app not found")
     return None
 
 
@@ -119,6 +127,12 @@ def running_app():
     logger.info("Launching %s %s (cwd=%s)", binary, APP_ARGS, cwd)
     logger.info("DISPLAY=%r DBUS_SESSION_BUS_ADDRESS=%r",
                 env.get("DISPLAY"), env.get("DBUS_SESSION_BUS_ADDRESS"))
+    print(f"[DEBUG] running_app: binary={binary} args={APP_ARGS} cwd={cwd}")
+    print(f"[DEBUG] running_app: QT_QPA_PLATFORM={env.get('QT_QPA_PLATFORM')!r} "
+          f"QT_PLUGIN_PATH={env.get('QT_PLUGIN_PATH')!r} "
+          f"LD_LIBRARY_PATH={env.get('LD_LIBRARY_PATH')!r}")
+    print(f"[DEBUG] running_app: DISPLAY={env.get('DISPLAY')!r} "
+          f"DBUS_SESSION_BUS_ADDRESS={env.get('DBUS_SESSION_BUS_ADDRESS')!r}")
 
     process = subprocess.Popen(
         [str(binary), *APP_ARGS],
@@ -127,6 +141,7 @@ def running_app():
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
     )
+    print(f"[DEBUG] running_app: started pid={process.pid}")
     try:
         yield process
     finally:
@@ -136,8 +151,10 @@ def running_app():
                 process.wait(timeout=5)
             except subprocess.TimeoutExpired:
                 logger.warning("pid=%s did not exit in time, killing", process.pid)
+                print(f"[DEBUG] running_app: pid={process.pid} did not exit in time, killing")
                 process.kill()
                 process.wait()
+        print(f"[DEBUG] running_app: final returncode={process.returncode}")
         if process.stdout:
             app_logs = process.stdout.read().decode("utf-8", errors="replace")
             logger.info(
@@ -145,10 +162,15 @@ def running_app():
                 process.returncode,
                 app_logs or "(none)",
             )
+            print(f"[DEBUG] running_app: binary output:\n{app_logs or '(none)'}")
 
 
 def test_app_exposes_accessible_controls(running_app):
+    print(f"[DEBUG] test: APP_BINARY={APP_BINARY!r} APP_NAME={APP_NAME!r} "
+          f"APP_ARGS={APP_ARGS!r} QPA_PLATFORM={QPA_PLATFORM!r} "
+          f"STARTUP_TIMEOUT={STARTUP_TIMEOUT!r}")
     app = _find_app(running_app, APP_NAME, STARTUP_TIMEOUT)
+    print(f"[DEBUG] test: running_app.poll()={running_app.poll()!r}")
     assert running_app.poll() is None, (
         f"Application exited early: returncode {running_app.returncode}"
     )
@@ -157,7 +179,9 @@ def test_app_exposes_accessible_controls(running_app):
     names = set()
     _collect_names(app, names)
     logger.info("Collected AT-SPI accessible names: %s", sorted(names))
+    print(f"[DEBUG] test: collected names={sorted(names)}")
 
     if EXPECTED_NAMES:
         missing = EXPECTED_NAMES - names
+        print(f"[DEBUG] test: expected={sorted(EXPECTED_NAMES)} missing={sorted(missing)}")
         assert not missing, f"Controls missing from the AT-SPI tree: {missing}"
